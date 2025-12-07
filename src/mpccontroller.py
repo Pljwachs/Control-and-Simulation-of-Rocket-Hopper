@@ -195,8 +195,8 @@ class MPCController:
             # inequality constrains
             x_min=0.0
             x_max=5.0
-            v_min=-3.0
-            v_max=3.0
+            v_min=-5.0
+            v_max=5.0
          
             md4n_min=0
             md4n_max=ca.inf
