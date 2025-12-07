@@ -15,8 +15,7 @@ class MPCController:
             Qf: np.ndarray,
             xs: np.ndarray,
             freq: float,
-            N: int,
-            itermax: int     
+            N: int,   
         )->None:
 
         """
@@ -48,8 +47,6 @@ class MPCController:
         self.x_pred=None
         self.u_pred=None
 
-        self.itermax=itermax
-
         # initial setup for the solver and function
         self.solver=None
         self.f_dynamics=None
@@ -73,9 +70,9 @@ class MPCController:
         k_1,alg_1=f(current_x,current_z,current_u)
         k_2,_=f(current_x+self.dt/2*k_1,current_z,current_u)
         k_3,_=f(current_x+self.dt/2*k_2,current_z,current_u)
-        k_4,_=f(current_x+self.dt/2*k_3,current_z,current_u)
+        k_4,_=f(current_x+self.dt*k_3,current_z,current_u)
 
-        predicted_state=current_x+self.dt/6*(k_1+2*k_2+2 * k_3 + k_4)
+        predicted_state=current_x+self.dt/6*(k_1+2*k_2+2*k_3 +k_4)
 
         return predicted_state
 
@@ -97,8 +94,7 @@ class MPCController:
             # Actuator delay is assumed to be as part of noise
             md4n=ca.SX.sym('md4n')
             pe=ca.SX.sym('pe')
-            ve=ca.SX.sym('ve')
-            alg_states=ca.vertcat(md4n,pe,ve)
+            alg_states=ca.vertcat(md4n,pe)
             n_alg_states=alg_states.numel()
 
 
@@ -106,15 +102,14 @@ class MPCController:
             self.n_controls=n_controls
             self.n_alg_states=n_alg_states
             
-            md4n_eq=(6.36e-5)*p3_u/7.6075*125/216                              # m_choked
+            md4n_eq=(1.5303425617273556e-07)*p3_u                                          # m_choked (kg/s)
             # Nozzle exit
-            pe_eq=p3_u/ca.power(1.67712, 3.5)                          #exit pressure
-            ve_eq=15.2                                                          #exit velocity
-            alg=ca.vertcat(md4n-md4n_eq,pe-pe_eq,ve-ve_eq)
+            pe_eq=p3_u*0.1615341389                                                        # exit pressure                                                #exit velocity (m/s)
+            alg=ca.vertcat(md4n-md4n_eq,pe-pe_eq)
             
             # rhs
             dotx=v
-            dotv=md4n*ve/3.5-9.81-10/3.5*ca.sign(v)
+            dotv=md4n*479.8617142065833/3.5-9.81-10/3.5*ca.sign(v)                     #-6*dotx*self.dt
             ode=ca.vertcat(dotx,dotv)
             
             #dae={'x':x_all,'z':z_all,'p':p_all,'ode':ode,'alg':alg}
@@ -151,10 +146,11 @@ class MPCController:
                 k_1,alg_1=f(current_state,current_alg,current_cntl)
                 k_2,_=f(current_state+self.dt/2*k_1,current_alg,current_cntl)
                 k_3,_=f(current_state+self.dt/2*k_2,current_alg,current_cntl)
-                k_4,_=f(current_state+self.dt/2*k_3,current_alg,current_cntl)
+                k_4,_=f(current_state+self.dt*k_3,current_alg,current_cntl)
 
-                predicted_state=current_state+self.dt/6*(k_1+2*k_2+2 * k_3 + k_4)
+                predicted_state=current_state+self.dt/6*(k_1+2*k_2+2*k_3 + k_4)
 
+                # Dynamics constraint: next state equals the discrete dynamics from current state and control.
                 next_state=X[:,i+1]
                 g.append(next_state-predicted_state)
                 g.append(alg_1)
@@ -200,20 +196,14 @@ class MPCController:
             x_max=5.0
             v_min=-10.0
             v_max=10.0
-
-
          
             md4n_min=0
             md4n_max=ca.inf
             pe_min=0
             pe_max=ca.inf
-            ve_min=0
-            ve_max=ca.inf
 
-            
-
-            u_min=1.0   #bar
-            u_max=11.0  #bar
+            u_min=100000   #bar
+            u_max=1100000  #bar
 
             lbx=[]
             ubx=[]
@@ -227,10 +217,8 @@ class MPCController:
             for i in range(self.N+1):
                 lbx.append(md4n_min)
                 lbx.append(pe_min)
-                lbx.append(ve_min)
                 ubx.append(md4n_max)
                 ubx.append(pe_max)
-                ubx.append(ve_max)
 
             # control state bounds (typically unbounded or with physical limits) 
             for i in range(self.N):
@@ -239,7 +227,7 @@ class MPCController:
 
 
             self.args={
-                'lbg': [0.0]*g.numel(),
+                'lbg': [0.0]*g.numel(),  # all equality constraints are set to 0
                 'ubg': [0.0]*g.numel(),
                 'lbx': lbx,
                 'ubx': ubx
@@ -247,7 +235,7 @@ class MPCController:
 
             return self.solver,f
     
-    def compute_action(self,x0=None,z0=None,xs=None):
+    def compute_action(self,x0,z0,xs):
             # initialization
             """
             Run the MPC controller
@@ -260,87 +248,54 @@ class MPCController:
 
             if self.solver is None: 
                  print("the solver didn't call, please run the setup() beforehand")
-            if x0 is None:
-                 x0=self.x0
+ 
             if xs is None:
-                 xs=self.xs
-            if z0 is None:
-                 z0=self.z0
+                 self.xs=xs
+            
+            self.x0=x0
+            self.z0=z0
+
+            #print("x0", x0,
+            #      "z0", z0)
 
             # initialize
-            state_0=ca.DM(x0)
-            state_ref=ca.DM(xs)
+            state_0=ca.DM(self.x0)
+            state_ref=ca.DM(self.xs)
 
             # initial guess for optimization variables
             X0=ca.repmat(state_0, 1, self.N+1)
             Z0=ca.repmat(ca.DM(self.z0),1,self.N+1)
             u0_init=ca.DM(self.u0).reshape((self.n_controls,1))
             u0=ca.repmat(u0_init,1,self.N)
+
+
+            #set parameter
+            p=ca.vertcat(state_0,state_ref)
+
+            #set initial guess
+            X0_v = X0.reshape((-1, 1))
+            Z0_v = Z0.reshape((-1, 1))
+            u0_v = u0.reshape((-1, 1))
+            x0_opt = ca.vertcat(X0_v,Z0_v,u0_v)
+
+            res=self.solver(x0=x0_opt,lbx=self.args['lbx'],ubx=self.args['ubx'],lbg=self.args['lbg'],ubg=self.args['ubg'],p=p)
+
+
+            # Extract the control sequence from the solution. The state trajectory is first,
+            # so the first control is located at index = n_states*(N+1)
+            sol=res['x'].full().flatten()
             
-            # store for trajectory
-            cat_states = self.dm_to_array(X0)
-            cat_alg_states = self.dm_to_array(Z0)
-            cat_controls =self.dm_to_array(u0[:, 0])
-            times = np.array([[0]])
+            idx=0
+            X_sol=sol[idx:idx+self.n_states*(self.N+1)].reshape(self.n_states,self.N+1,order='F')
+            idx=self.n_states*(self.N+1)
 
-            mpc_iter=0
-            
-        
-            while ca.norm_2(state_0-state_ref)>1e-2 and mpc_iter<self.itermax:
-                t1=time.time()
-                
-                #set parameter
-                p=ca.vertcat(state_0,state_ref)
+            Z_sol=sol[idx:idx+self.n_alg_states*(self.N+1)].reshape(self.n_alg_states,self.N+1,order='F')
+            idx+=self.n_alg_states*(self.N+1)
 
-                #set initial guess
-
-                X0_v = X0.reshape((-1, 1))
-                Z0_v = Z0.reshape((-1, 1))
-                u0_v = u0.reshape((-1, 1))
-                x0_opt = ca.vertcat(X0_v,Z0_v,u0_v)
-
-                res=self.solver(x0=x0_opt,lbx=self.args['lbx'],ubx=self.args['ubx'],lbg=self.args['lbg'],ubg=self.args['ubg'],p=p)
-    
-    
-                # Extract the control sequence from the solution. The state trajectory is first,
-                # so the first control is located at index = n_states*(N+1)
-                sol=res['x'].full().flatten()
-                
-                idx=0
-                X_sol=sol[idx:idx+self.n_states*(self.N+1)].reshape(self.n_states,self.N+1,order='F')
-                idx=self.n_states*(self.N+1)
-
-                Z_sol=sol[idx:idx+self.n_alg_states*(self.N+1)].reshape(self.n_alg_states,self.N+1,order='F')
-                idx+=self.n_alg_states*(self.N+1)
-
-                U_sol=sol[idx:idx+self.n_controls*self.N].reshape(self.n_controls,self.N,order='F')
-
-                #store trajectory
-                cat_states = np.column_stack((cat_states, X_sol[:, 0]))
-                cat_alg_states = np.column_stack((cat_alg_states, Z_sol[:, 0]))
-                cat_controls = np.column_stack((cat_controls, U_sol[:, 0]))
-
-                # Propagate the system using the discrete dynamics f (Euler integration)
-                # Note: We use the same function f defined earlier with CasADi operators
-                u_applied=ca.DM(U_sol[:,0])
-                z_current=ca.DM(Z_sol[:,0])
-                state_0= self.dynamics(self.f_dynamics,state_0, z_current,u_applied)
-
-                t2=time.time() 
-                
-                times=np.vstack((times,t2-t1))
-                
-                mpc_iter+=1
-                
-                if mpc_iter % 10 == 0:
-                    print(f'Iteration {mpc_iter}, error: {float(ca.norm_2(state_0 - state_ref)):.6f}')
-
-            
-            print(f'\nSteady state error: {float(ca.norm_2(state_0 - state_ref)):.6e}')
-            print(f'Total iterations: {mpc_iter}')
-            print(f'Average solve time: {np.mean(times):.4f} s')
-
-            return float(cat_controls[:,0].squeeze())
+            U_sol=sol[idx:idx+self.n_controls*self.N].reshape(self.n_controls,self.N,order='F')
+             
+            # Return ONLY the first control action
+            return float(U_sol[0, 0])
 
 
         
