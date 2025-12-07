@@ -46,6 +46,7 @@ class MPCController:
 
         self.x_pred=None
         self.u_pred=None
+        self.z_pred=None
 
         # initial setup for the solver and function
         self.solver=None
@@ -109,7 +110,7 @@ class MPCController:
             
             # rhs
             dotx=v
-            dotv=md4n*479.8617142065833/3.5-9.81-10/3.5*ca.sign(v)                     #-6*dotx*self.dt
+            dotv=md4n*479.8617142065833/3.5-9.81-10/3.5*ca.sign(v)-6*dotx*self.dt                    #-6*dotx*self.dt
             ode=ca.vertcat(dotx,dotv)
             
             #dae={'x':x_all,'z':z_all,'p':p_all,'ode':ode,'alg':alg}
@@ -194,8 +195,8 @@ class MPCController:
             # inequality constrains
             x_min=0.0
             x_max=5.0
-            v_min=-10.0
-            v_max=10.0
+            v_min=-3.0
+            v_max=3.0
          
             md4n_min=0
             md4n_max=ca.inf
@@ -235,7 +236,7 @@ class MPCController:
 
             return self.solver,f
     
-    def compute_action(self,x0,z0,xs):
+    def compute_action(self,x0,z0,xs,u0):
             # initialization
             """
             Run the MPC controller
@@ -248,34 +249,57 @@ class MPCController:
 
             if self.solver is None: 
                  print("the solver didn't call, please run the setup() beforehand")
- 
-            if xs is None:
-                 self.xs=xs
-            
-            self.x0=x0
-            self.z0=z0
 
-            #print("x0", x0,
-            #      "z0", z0)
+            if xs is not None:
+                self.xs = xs
+
+            # 1. Check if the controller has run before (i.e., if warm-start is available)
+            if self.x_pred is None:
+                # Cold start: Use the current state x0 repeated, and a constant u0
+                X0_guess = ca.repmat(ca.DM(x0), 1, self.N + 1)
+                U0_guess = ca.repmat(ca.DM(self.u0).reshape((self.n_controls, 1)), 1, self.N)
+                Z0_guess = ca.repmat(ca.DM(self.z0).reshape((self.n_alg_states, 1)), 1, self.N + 1)
+            else:
+                # Warm start: Shift the previous solution by one step
+                
+                # State shift: Use x_pred[1:] and append the last state (or target state)
+                X_shift = self.x_pred[:, 1:]
+                X_last = ca.DM(self.x_pred[:, -1]).reshape((self.n_states, 1)) # last state of old horizon
+                X0_guess = ca.horzcat(X_shift, X_last)
+                
+                # Control shift: Use u_pred[1:] and append the last control (or hover control)
+                U_shift = self.u_pred[:, 1:]
+                U_last = ca.DM(self.u_pred[:, -1]).reshape((self.n_controls, 1)) # last control of old horizon
+                U0_guess = ca.horzcat(U_shift, U_last)
+
+                # Algebraic state shift (if applicable)
+                Z_shift = self.z_pred[:, 1:] 
+                Z_last = ca.DM(self.z_pred[:, -1]).reshape((self.n_alg_states, 1)) 
+                Z0_guess = ca.horzcat(Z_shift, Z_last)
+            
+    
+            self.x0=x0
+            #self.z0=z0
+            #self.u0=u0
 
             # initialize
             state_0=ca.DM(self.x0)
             state_ref=ca.DM(self.xs)
 
             # initial guess for optimization variables
-            X0=ca.repmat(state_0, 1, self.N+1)
-            Z0=ca.repmat(ca.DM(self.z0),1,self.N+1)
-            u0_init=ca.DM(self.u0).reshape((self.n_controls,1))
-            u0=ca.repmat(u0_init,1,self.N)
+            #X0=ca.repmat(state_0, 1, self.N+1)
+            #Z0=ca.repmat(ca.DM(self.z0),1,self.N+1)
+            #u0_init=ca.DM(self.u0).reshape((self.n_controls,1))
+            #u0=ca.repmat(u0_init,1,self.N)
 
 
             #set parameter
             p=ca.vertcat(state_0,state_ref)
 
             #set initial guess
-            X0_v = X0.reshape((-1, 1))
-            Z0_v = Z0.reshape((-1, 1))
-            u0_v = u0.reshape((-1, 1))
+            X0_v = X0_guess.reshape((-1, 1))
+            Z0_v = Z0_guess.reshape((-1, 1))
+            u0_v = U0_guess.reshape((-1, 1))
             x0_opt = ca.vertcat(X0_v,Z0_v,u0_v)
 
             res=self.solver(x0=x0_opt,lbx=self.args['lbx'],ubx=self.args['ubx'],lbg=self.args['lbg'],ubg=self.args['ubg'],p=p)
@@ -293,6 +317,13 @@ class MPCController:
             idx+=self.n_alg_states*(self.N+1)
 
             U_sol=sol[idx:idx+self.n_controls*self.N].reshape(self.n_controls,self.N,order='F')
+
+
+            self.x_pred=X_sol
+            self.u_pred=U_sol
+            self.z_pred=Z_sol
+
+            #print("u first 10:", self.u_pred[0,:10])
              
             # Return ONLY the first control action
             return float(U_sol[0, 0])
