@@ -110,7 +110,7 @@ class MPCController:
             
             # rhs
             dotx=v
-            dotv=md4n*479.8617142065833/3.5-9.81-10/3.5*ca.sign(v)-6*dotx*self.dt                    #-6*dotx*self.dt
+            dotv=md4n*479.88291219746293/3.5-9.81-10/3.5*ca.sign(v)-6*v/3.5                    #-6*dotx*self.dt
             ode=ca.vertcat(dotx,dotv)
             
             #dae={'x':x_all,'z':z_all,'p':p_all,'ode':ode,'alg':alg}
