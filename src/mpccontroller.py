@@ -13,6 +13,7 @@ class MPCController:
             Q: np.ndarray,
             R: np.ndarray,
             Qf: np.ndarray,
+            rho: np.ndarray,
             xs: np.ndarray,
             freq: float,
             N: int,   
@@ -38,6 +39,7 @@ class MPCController:
         self.Q=Q
         self.R=R
         self.Qf=Qf
+        self.rho=rho
 
         self.N=N
 
@@ -103,14 +105,14 @@ class MPCController:
             self.n_controls=n_controls
             self.n_alg_states=n_alg_states
             
-            md4n_eq=(1.5303425617273556e-07)*p3_u                                          # m_choked (kg/s)
+            md4n_eq=(1.5303425617273556e-07)*p3_u                                      # m_choked (kg/s)
             # Nozzle exit
-            pe_eq=p3_u*0.1615341389                                                        # exit pressure                                                #exit velocity (m/s)
+            pe_eq=p3_u*0.1615341389                                                    # exit pressure                                                #exit velocity (m/s)
             alg=ca.vertcat(md4n-md4n_eq,pe-pe_eq)
             
             # rhs
             dotx=v
-            dotv=md4n*479.88291219746293/3.5-9.81-10/3.5*ca.sign(v)-6*v/3.5                    #-6*dotx*self.dt
+            dotv=md4n*479.88291219746293/3.5-9.81-10/3.5*ca.tanh(v)-6*x/3.5                    #-6*dotx*self.dt
             ode=ca.vertcat(dotx,dotv)
             
             #dae={'x':x_all,'z':z_all,'p':p_all,'ode':ode,'alg':alg}
@@ -142,8 +144,11 @@ class MPCController:
                 current_alg=Z[:,i]
                 current_cntl=U[:,i]
 
-                obj+=(current_state-P[n_states:]).T @ self.Q @ (current_state-P[n_states:])+current_cntl.T @ self.R @ current_cntl
-                
+                u_scaled=current_cntl/1e5
+                R_mat=ca.DM(self.R)
+
+                obj+=(current_state-P[n_states:]).T @ self.Q @ (current_state-P[n_states:])+u_scaled.T @ R_mat @ u_scaled
+
                 k_1,alg_1=f(current_state,current_alg,current_cntl)
                 k_2,_=f(current_state+self.dt/2*k_1,current_alg,current_cntl)
                 k_3,_=f(current_state+self.dt/2*k_2,current_alg,current_cntl)
@@ -253,6 +258,7 @@ class MPCController:
             if xs is not None:
                 self.xs = xs
 
+
             # 1. Check if the controller has run before (i.e., if warm-start is available)
             if self.x_pred is None:
                 # Cold start: Use the current state x0 repeated, and a constant u0
@@ -277,13 +283,15 @@ class MPCController:
                 Z_last = ca.DM(self.z_pred[:, -1]).reshape((self.n_alg_states, 1)) 
                 Z0_guess = ca.horzcat(Z_shift, Z_last)
             
+            
+            
     
             self.x0=x0
             #self.z0=z0
             #self.u0=u0
 
             # initialize
-            state_0=ca.DM(self.x0)
+            state_0=ca.DM(x0)
             state_ref=ca.DM(self.xs)
 
             # initial guess for optimization variables
@@ -327,9 +335,3 @@ class MPCController:
              
             # Return ONLY the first control action
             return float(U_sol[0, 0])
-
-
-        
-
-
-
