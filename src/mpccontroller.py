@@ -13,7 +13,6 @@ class MPCController:
             Q: np.ndarray,
             R: np.ndarray,
             Qf: np.ndarray,
-            rho: np.ndarray,
             xs: np.ndarray,
             freq: float,
             N: int,   
@@ -39,7 +38,6 @@ class MPCController:
         self.Q=Q
         self.R=R
         self.Qf=Qf
-        self.rho=rho
 
         self.N=N
 
@@ -106,13 +104,13 @@ class MPCController:
             self.n_alg_states=n_alg_states
             
             md4n_eq=(1.5303425617273556e-07)*p3_u                                      # m_choked (kg/s)
-            # Nozzle exit
-            pe_eq=p3_u*0.1615341389                                                    # exit pressure                                                #exit velocity (m/s)
+            # Nozzle exit (assume "ve" is constant)
+            pe_eq=p3_u*0.1615341389                                             
             alg=ca.vertcat(md4n-md4n_eq,pe-pe_eq)
             
             # rhs
             dotx=v
-            dotv=md4n*479.88291219746293/3.5-9.81-10/3.5*ca.tanh(v)-6*x/3.5                    #-6*dotx*self.dt
+            dotv=md4n*479.88291219746293/3.5-9.81-10/3.5*ca.tanh(v)-6*x/3.5                    
             ode=ca.vertcat(dotx,dotv)
             
             #dae={'x':x_all,'z':z_all,'p':p_all,'ode':ode,'alg':alg}
@@ -294,13 +292,6 @@ class MPCController:
             state_0=ca.DM(x0)
             state_ref=ca.DM(self.xs)
 
-            # initial guess for optimization variables
-            #X0=ca.repmat(state_0, 1, self.N+1)
-            #Z0=ca.repmat(ca.DM(self.z0),1,self.N+1)
-            #u0_init=ca.DM(self.u0).reshape((self.n_controls,1))
-            #u0=ca.repmat(u0_init,1,self.N)
-
-
             #set parameter
             p=ca.vertcat(state_0,state_ref)
 
@@ -311,7 +302,6 @@ class MPCController:
             x0_opt = ca.vertcat(X0_v,Z0_v,u0_v)
 
             res=self.solver(x0=x0_opt,lbx=self.args['lbx'],ubx=self.args['ubx'],lbg=self.args['lbg'],ubg=self.args['ubg'],p=p)
-
 
             # Extract the control sequence from the solution. The state trajectory is first,
             # so the first control is located at index = n_states*(N+1)
