@@ -12,13 +12,13 @@ import numpy as np
 
 # teensy loop time
 loop_cycle_time = 1/60 # 60 measurement aquistions per second; can be adjusted to max of 66Hz
-control_duration = 10 # in [s] --> your anticipated flight duration / control event duration
+control_duration = 20 # in [s] --> your anticipated flight duration / control event duration
 
 log = np.zeros((5, int(control_duration/loop_cycle_time+1)))
 
 ### establishing serial connection
 # you need to figure out the serial port ID of your laptop; it might be different from the predefined
-ser = serial.Serial('/dev/ttyACM0', baudrate=57600)
+ser = serial.Serial('/dev/ttyUSB0', baudrate=57600)
 
 # setup/start commands for the hopper
 # resetting error status
@@ -38,7 +38,8 @@ ser.write(b'n') # donÄt change this
 ser.write(b'F') # don't change this
 
 h = 1 / 60
-x_target = 2
+trajectory = [2,1]
+x_target = trajectory[0]
 integral = 0
 lasterr = 0
 prev_position = 0
@@ -67,7 +68,7 @@ k_hose=6.0        # variable hopper mass [N/m]
 F_RR=10         # rolling resistence [N]
 
 # PID for pressure - Initial
-kp = 4.2
+kp = 4.5
 ki = 0.85
 kd = 4.0
 
@@ -79,7 +80,7 @@ ve_suggest_val=float(np.sqrt(ve_term * (1 - np.power(0.1615, (gamma - 1) / gamma
 
 thrust_req= m_hop*(g)+k_hose*x_target
 pressure_req=thrust_req/(ve_suggest_val*md4n_term)
-FF_term = 1*pressure_req/1e5
+FF_term = 0.7*pressure_req/1e5
 
 def pressure_PID(x_target, x, h, kp, ki, kd,FF_term):
     global integral, lasterr
@@ -121,8 +122,26 @@ while True:
 
     action = pressure_PID(x_target, position, h, kp, ki, kd,FF_term)
     action= int((action-1)/10*4095)
-    
     log[:5, counter] = [teensy_time, acceleration, position, pressure, action]
+
+    err_val = x_target - round(position,3)
+
+    if err_val<0.2 and err_val>-0.2:
+        eqbm_count = eqbm_count + 1
+        # print(f"Equilibrium count: {eqbm_count}")
+        # print(eqbm)
+    else:
+        eqbm_count = 0
+
+
+    if eqbm_count > 50 and eqbm < len(trajectory)-1:
+        eqbm = eqbm+1
+        eqbm_count = 0
+        x_target = trajectory[eqbm]
+        print(f"New target position: {x_target}m")
+
+    if eqbm == len(trajectory)-1 and eqbm_count > 50:
+        control_duration = 0
      
     # control input which is going to be sent to teensy
     action = f'<1:{action}>'
@@ -143,7 +162,7 @@ while True:
     if time.time() - main_timer > control_duration:
         break
     
-np.save('PID/trajectory_test/log_file_', log)
+np.save('PID_log/log_file_2points_2_2', log)
 print(counter)
 
 ser.write('<1:1000>'.encode())  # reduce thrust to decrease altitude

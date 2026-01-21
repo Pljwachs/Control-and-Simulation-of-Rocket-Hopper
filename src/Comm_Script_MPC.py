@@ -6,9 +6,11 @@ Created on Mon Jan 19 14:36:14 2026
 """
 
 # importing libraries
-import serial  # Library for serial communication with python - install command: pip install pyserial
-import time  # time tracking library
+import serial
+import time
+import matplotlib.pyplot as plt
 import numpy as np
+from mpccontroller import MPCController
 
 # teensy loop time
 loop_cycle_time = 1/60 # 60 measurement aquistions per second; can be adjusted to max of 66Hz
@@ -18,7 +20,7 @@ log = np.zeros((5, int(control_duration/loop_cycle_time+1)))
 
 ### establishing serial connection
 # you need to figure out the serial port ID of your laptop; it might be different from the predefined
-ser = serial.Serial('/dev/ttyACM0', baudrate=57600)
+ser = serial.Serial('/dev/ttyUSB0', baudrate=57600)
 
 # setup/start commands for the hopper
 # resetting error status
@@ -37,68 +39,65 @@ ser.write(b'n') # donÄt change this
 # f = failure
 ser.write(b'F') # don't change this
 
-h = 1 / 60
 x_target = 2
 integral = 0
 lasterr = 0
-prev_position = 0
+prev_position = 0.0
+Th_d=9e-3                        # throat diameter [m]
+A_throat=np.pi*(Th_d/2)**2      #[m^2]
+T_4=273                        #[k]
+prev_pos = 0
 eqbm_count = 0
 eqbm = 0
-message_count = 0
-
-## Nozzle
-Th_d=9e-3                       # throat diameter [m]
-Th_exit_d=11e-3                 # exit diameter [m]
-A_throat=np.pi*(Th_d/2)**2      # area throat[m^2]
-A_e=np.pi*(Th_exit_d/2)**2      # area exit nozzle[m^2]
-epsilon=A_e/A_throat            # expansion ratio
-T_4=273                         # [k]
 
 ## constant
-R=8314             # universal gas constant [J/kmol*K]
+R_gas=8314          # universal gas constant [J/kmol*K]
 M=28.013           # nitrogen gas  [kg/kmol]
 gamma=1.4          # ratio of specific heats (diatomic gas)
-g=9.81             # [m/s^2]
 
-## mass
-m_hop=3.5       # mass of hopper [kg]
-m_hose=1.0      # mass of hose   [kg]
-k_hose=6.0        # variable hopper mass [N/m]
-F_RR=10         # rolling resistence [N]
+# teensy loop time
+loop_cycle_time = 1/60
+control_duration = 10 #12
+start_time = time.time()
+prev_time = 0
+prev_pressure = 0
 
-# PID for pressure - Initial
-kp = 4.2
-ki = 0.85
-kd = 4.0
+print("Starting control loop...")
+message_count = 0
+received_count = 0
+sent_count = 0
 
-# FF_Term
-md4n_term=A_throat/np.sqrt(T_4*R/(M*gamma)) * np.power((gamma+1)/2, -(gamma+1)/(2*(gamma-1)))
-ve_term=(2*gamma*R*T_4)/(gamma-1)/M
+## For MPC parameter (cost function)
+Q=np.array([[10.0,0.0],[0.0,10.0]])      
+R=np.array([0.01])
+Qf=100*Q
 
-ve_suggest_val=float(np.sqrt(ve_term * (1 - np.power(0.1615, (gamma - 1) / gamma))))
+N=20                                          # horizon
+freq=10
 
-thrust_req= m_hop*(g)+k_hose*x_target
-pressure_req=thrust_req/(ve_suggest_val*md4n_term)
-FF_term = 1*pressure_req/1e5
+# initial input
+u0=np.array([1e5]).reshape(-1,1)            # control input p3_u
+z0=np.array([0,1e5]).reshape(-1,1)      # algebraic parameter  initial value: md4n pe       
+motion_t0=np.array([0,0])  
 
-def pressure_PID(x_target, x, h, kp, ki, kd,FF_term):
-    global integral, lasterr
+#target state: xs / initial state x0
+xs=np.array([x_target,0.0]).reshape(-1,1)                   
+x0=np.array([motion_t0[0],motion_t0[1]]).reshape(-1,1)
+mpc=MPCController(motion_t0,u0,z0,Q,R,Qf,xs,freq,N)  # Hz 
+# Side Note: If the MPC frequency is the same as the simulation frequency can reduce strange oscillation, but need to consider the cost
 
-    err = x - x_target
-    integral = integral + ki * err * h
-    derr = (err - lasterr) / h
+# some notes regard the horizon (N) and frequency
+# N: the higher the horizon-> more easy to converge -> but also very costly
+# freq: the higher the inner-loop rate-> the controller react more quickly to disturbance or model mismatch and better tracking performance -> but also reduce 
+# the prediction duration, if the prediction duration is not enough, it will also not converge 
 
-    PIDlaw = -(kp * err + kd * derr + ki * integral) + FF_term
+mpc.setup()
 
-    if PIDlaw < 1:
-        output = 1
-    elif PIDlaw > 11:
-        output = 11
-    else:
-        output = PIDlaw
-    lasterr = err
+Me = 1.849  # from your calculation
 
-    return output
+# Open file for writing
+#folder_path = 'Test_Dummy' #Also change the traj value
+#file_path = folder_path + '/simulation_data.txt'
 
 # -------------------------------------------------------------------------
 ### main loop
@@ -119,9 +118,21 @@ while True:
     
     '''INSERT YOUR CONTROL LAW HERE '''  
 
-    action = pressure_PID(x_target, position, h, kp, ki, kd,FF_term)
-    action= int((action-1)/10*4095)
-    
+    velocity = (position - prev_position) / ((teensy_time - prev_time)/1000)
+    md4=A_throat*pressure/(np.sqrt(T_4*R_gas/(M*gamma)))*np.power((gamma+1)/2,-(gamma+1)/(2*(gamma-1)))  # m_choked (at choked condition)
+    xt = [position, velocity]
+
+    pe = pressure / ((1 + ((gamma-1)/2 * Me**2))**(gamma/(gamma-1)))
+    alg_state = np.array([md4, pe])
+
+    action = mpc.compute_action(x0=np.array(xt).reshape(-1,1),z0=np.array(alg_state).reshape(-1,1),
+                           xs=np.array([x_target,0.0]).reshape(-1,1),u0=np.array(prev_position))
+    action= int((((action/1e5)-1)/10)*4095)
+
+    prev_time = teensy_time
+    prev_pressure = pressure
+    prev_position = position
+
     log[:5, counter] = [teensy_time, acceleration, position, pressure, action]
      
     # control input which is going to be sent to teensy
@@ -143,7 +154,7 @@ while True:
     if time.time() - main_timer > control_duration:
         break
     
-np.save('PID/trajectory_test/log_file_', log)
+np.save('MPC_log/log_file_test_1_tar2_2', log)
 print(counter)
 
 ser.write('<1:1000>'.encode())  # reduce thrust to decrease altitude

@@ -257,12 +257,12 @@ class MPCController:
                 self.xs = xs
 
             
-            # use the cold start instead
-            X0_guess = ca.repmat(ca.DM(x0), 1, self.N + 1)
-            U0_guess = ca.repmat(ca.DM(self.u0).reshape((self.n_controls, 1)), 1, self.N)
-            Z0_guess = ca.repmat(ca.DM(self.z0).reshape((self.n_alg_states, 1)), 1, self.N + 1)
+                # # use the cold start instead
+                # X0_guess = ca.repmat(ca.DM(x0), 1, self.N + 1)
+                # U0_guess = ca.repmat(ca.DM(self.u0).reshape((self.n_controls, 1)), 1, self.N)
+                # Z0_guess = ca.repmat(ca.DM(self.z0).reshape((self.n_alg_states, 1)), 1, self.N + 1)
 
-            '''
+            
             # 1. Check if the controller has run before (i.e., if warm-start is available)
             if self.x_pred is None:
                 # Cold start: Use the current state x0 repeated, and a constant u0
@@ -286,7 +286,7 @@ class MPCController:
                 Z_shift = self.z_pred[:, 1:] 
                 Z_last = ca.DM(self.z_pred[:, -1]).reshape((self.n_alg_states, 1)) 
                 Z0_guess = ca.horzcat(Z_shift, Z_last)
-            '''
+            
             
         
             self.x0=x0
